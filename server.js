@@ -152,143 +152,58 @@ app.get("/prices", (_req, res) => {
   });
 });
 
+// ─── Paid endpoint: GET /trade ──────────────────────────────────────────────────
+// x402scan probes GET first — return 402 immediately (no body to validate on GET).
+
+app.get("/trade", (_req, res) => {
+  res.status(402).json(
+    buildPaymentRequired(
+      "trade",
+      "Trade endpoint — POST with JSON body: { pair, side, amount }",
+      0.003
+    )
+  );
+});
+
+// ─── Paid endpoint: GET /convert ────────────────────────────────────────────────
+// x402scan probes GET first — return 402 immediately (no body to validate on GET).
+
+app.get("/convert", (_req, res) => {
+  res.status(402).json(
+    buildPaymentRequired(
+      "convert",
+      "Convert endpoint — POST with JSON body: { from, to, amount }",
+      0.005
+    )
+  );
+});
+
 // ─── Paid endpoint: POST /trade ────────────────────────────────────────────────
 
 app.post("/trade", async (req, res) => {
-  try {
-    const { pair, side, amount, price } = req.body;
-
-    if (!pair || !side || !amount) {
-      return res.status(400).json({
-        error: "Missing required parameters",
-        required: ["pair", "side", "amount"],
-        received: req.body,
-      });
-    }
-
-    if (!SUPPORTED_PAIRS[pair]) {
-      return res.status(400).json({
-        error: "Unsupported trading pair",
-        supported: Object.keys(SUPPORTED_PAIRS),
-        requested: pair,
-      });
-    }
-
-    if (!["buy", "sell"].includes(side.toLowerCase())) {
-      return res.status(400).json({
-        error: "Invalid side",
-        message: "Side must be 'buy' or 'sell'",
-      });
-    }
-
-    const amountNum = parseFloat(amount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      return res.status(400).json({
-        error: "Invalid amount",
-        message: "Amount must be a positive number",
-      });
-    }
-
-    const pairInfo = SUPPORTED_PAIRS[pair];
-    let rate = MOCK_PRICES[pairInfo.quote] / MOCK_PRICES[pairInfo.base];
-    if (pairInfo.base !== pair.split("/")[0]) {
-      rate = 1 / rate;
-    }
-
-    const tradeValue = amountNum * rate;
-    const fee = tradeValue * pairInfo.fee;
-    // const totalCost =
-    //   side.toLowerCase() === "buy" ? tradeValue + fee : tradeValue - fee;
-
-    // Trading fee in USDC (minimum $0.001)
-    const priceUsdc = Math.max(0.001, tradeValue * 0.001);
-
-    // Return canonical x402 v2 402 challenge
-    res.status(402).json(
-      buildPaymentRequired(
-        "trade",
-        `Trade: ${amount} ${pairInfo.base} ${side}`,
-        priceUsdc
-      )
-    );
-  } catch (error) {
-    console.error("Trade error:", error);
-    res.status(500).json({
-      error: "Internal server error",
-      message: error.message,
-    });
-  }
+  // Return 402 before any body validation so unauthenticated probes always
+  // reach the payment challenge (per x402scan discovery spec).
+  res.status(402).json(
+    buildPaymentRequired(
+      "trade",
+      "Trade endpoint — POST with JSON body: { pair, side, amount }",
+      0.003
+    )
+  );
 });
 
 // ─── Paid endpoint: POST /convert ──────────────────────────────────────────────
 
 app.post("/convert", async (req, res) => {
-  try {
-    const { from, to, amount } = req.body;
-
-    if (!from || !to || !amount) {
-      return res.status(400).json({
-        error: "Missing required parameters",
-        required: ["from", "to", "amount"],
-        received: req.body,
-      });
-    }
-
-    const pair = `${from}/${to}`;
-    const reversePair = `${to}/${from}`;
-
-    let pairInfo = SUPPORTED_PAIRS[pair];
-    let isInverse = false;
-
-    if (!pairInfo) {
-      pairInfo = SUPPORTED_PAIRS[reversePair];
-      if (!pairInfo) {
-        return res.status(400).json({
-          error: "Unsupported trading pair",
-          supported: Object.keys(SUPPORTED_PAIRS),
-          requested: pair,
-        });
-      }
-      isInverse = true;
-    }
-
-    const amountNum = parseFloat(amount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      return res.status(400).json({
-        error: "Invalid amount",
-        message: "Amount must be a positive number",
-      });
-    }
-
-    let rate = MOCK_PRICES[pairInfo.quote] / MOCK_PRICES[pairInfo.base];
-    if (isInverse) {
-      rate = 1 / rate;
-      const tempBase = pairInfo.base;
-      pairInfo.base = pairInfo.quote;
-      pairInfo.quote = tempBase;
-    }
-
-    const fee = amountNum * pairInfo.fee;
-    const netAmount = amountNum - fee;
-    const convertedAmount = netAmount * rate;
-
-    // Conversion fee in USDC (minimum $0.001)
-    const priceUsdc = Math.max(0.001, convertedAmount * 0.005);
-
-    res.status(402).json(
-      buildPaymentRequired(
-        "convert",
-        `Convert: ${amount} ${from} → ${to}`,
-        priceUsdc
-      )
-    );
-  } catch (error) {
-    console.error("Conversion error:", error);
-    res.status(500).json({
-      error: "Internal server error",
-      message: error.message,
-    });
-  }
+  // Return 402 before any body validation so unauthenticated probes always
+  // reach the payment challenge (per x402scan discovery spec).
+  res.status(402).json(
+    buildPaymentRequired(
+      "convert",
+      "Convert endpoint — POST with JSON body: { from, to, amount }",
+      0.005
+    )
+  );
 });
 
 // ─── Payment completion endpoints (free — called by facilitator after payment) ─
@@ -452,6 +367,39 @@ function buildOpenAPISpec() {
         },
       },
       "/trade": {
+        get: {
+          operationId: "getTradeChallenge",
+          summary: "Get trade payment challenge",
+          description:
+            "Returns a 402 payment challenge. POST with JSON body { pair, side, amount } to execute a trade.",
+          tags: ["trading"],
+          security: [{ x402: [] }],
+          "x-payment-info": {
+            price: { mode: "fixed", currency: "USD", amount: priceToDecimal(0.003) },
+            protocols: [
+              {
+                x402: {
+                  network: NETWORK,
+                  asset: USDC_ASSET,
+                  payTo: PLATFORM_WALLET,
+                  maxTimeoutSeconds: MAX_TIMEOUT_SEC,
+                },
+              },
+            ],
+          },
+          responses: {
+            "402": {
+              description: "Payment Required — include X-Payment header",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/x402PaymentRequirements",
+                  },
+                },
+              },
+            },
+          },
+        },
         post: {
           operationId: "executeTrade",
           summary: "Execute a trade (buy/sell)",
